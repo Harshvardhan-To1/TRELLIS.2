@@ -38,7 +38,12 @@ class Pipeline:
 
         _models = {}
         for k, v in args['models'].items():
-            _models[k] = models.from_pretrained(f"{path}/{v}")
+            if v.startswith("ckpts/") or v.startswith("./") or v.startswith("../"):
+                model_ref = f"{path}/{v}"
+            else:
+                model_ref = v
+         
+            _models[k] = models.from_pretrained(model_ref)
 
         new_pipeline = Pipeline(_models)
         new_pipeline._pretrained_args = args
