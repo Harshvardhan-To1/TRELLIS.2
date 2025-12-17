@@ -13,14 +13,19 @@ from pydantic import BaseModel, Field
 docker_string = r"""
 FROM falai/base:3.11-12.4.0
 
+USER root
+
 ENV PYTHONPATH="/app"
 ENV OPENCV_IO_ENABLE_OPENEXR="1"
 ENV PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 ENV SPARSE_CONV_BACKEND="flex_gemm"
 ENV ATTN_BACKEND="flash_attn"
+ENV CUDA_HOME="/usr/local/cuda"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
+    build-essential \
+    python3-dev \
     libjpeg-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -38,19 +43,22 @@ RUN pip install --no-cache-dir \
     tqdm easydict \
     transformers accelerate huggingface_hub safetensors \
     rembg onnxruntime \
+    requests \
     ninja
 
 # CUDA extensions required by TRELLIS.2 / O-Voxel pipeline
 RUN pip install --no-cache-dir flash-attn==2.7.3
-RUN pip install --no-cache-dir "git+https://github.com/NVlabs/nvdiffrast.git@v0.4.0"
-RUN pip install --no-cache-dir "git+https://github.com/JeffreyXiang/FlexGEMM.git"
-RUN pip install --no-cache-dir "git+https://github.com/JeffreyXiang/CuMesh.git"
+RUN pip install --no-cache-dir --no-build-isolation "git+https://github.com/NVlabs/nvdiffrast.git@v0.4.0"
+RUN pip install --no-cache-dir --no-build-isolation "git+https://github.com/JeffreyXiang/FlexGEMM.git"
+RUN pip install --no-cache-dir --no-build-isolation "git+https://github.com/JeffreyXiang/CuMesh.git"
+
+# Install bundled O-Voxel package (used for GLB export)
+RUN pip install --no-cache-dir --no-build-isolation /app/o-voxel
 
 # Optional utilities used by the project
 RUN pip install --no-cache-dir \
     "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8"
 
-USER root
 """
 
 
