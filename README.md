@@ -118,37 +118,21 @@ Here is an [example](example.py) of how to use the pretrained models for 3D asse
 
 ```python
 import os
-os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"  # Can save GPU memory
-import cv2
-import imageio
 from PIL import Image
-import torch
 from trellis2.pipelines import Trellis2ImageTo3DPipeline
-from trellis2.utils import render_utils
-from trellis2.renderers import EnvMap
 import o_voxel
 
-# 1. Setup Environment Map
-envmap = EnvMap(torch.tensor(
-    cv2.cvtColor(cv2.imread('assets/hdri/forest.exr', cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB),
-    dtype=torch.float32, device='cuda'
-))
-
-# 2. Load Pipeline
+# 1. Load Pipeline
 pipeline = Trellis2ImageTo3DPipeline.from_pretrained("microsoft/TRELLIS.2-4B")
 pipeline.cuda()
 
-# 3. Load Image & Run
+# 2. Load Image & Run
 image = Image.open("assets/example_image/T.png")
 mesh = pipeline.run(image)[0]
 mesh.simplify(16777216) # nvdiffrast limit
 
-# 4. Render Video
-video = render_utils.make_pbr_vis_frames(render_utils.render_video(mesh, envmap=envmap))
-imageio.mimsave("sample.mp4", video, fps=15)
-
-# 5. Export to GLB
+# 3. Export to GLB
 glb = o_voxel.postprocess.to_glb(
     vertices            =   mesh.vertices,
     faces               =   mesh.faces,
@@ -168,7 +152,6 @@ glb.export("sample.glb", extension_webp=True)
 ```
 
 Upon execution, the script generates the following files:
- - `sample.mp4`: A video visualizing the generated 3D asset with PBR materials and environmental lighting.
  - `sample.glb`: The extracted PBR-ready 3D asset in GLB format.
 
 **Note:** The `.glb` file is exported in `OPAQUE` mode by default. Although the alpha channel is preserved within the texture map, it is not active initially. To enable transparency, import the asset into your 3D software and manually connect the texture's alpha channel to the material's opacity or alpha input.
@@ -180,7 +163,7 @@ Upon execution, the script generates the following files:
 python app.py
 ```
 
-Then, you can access the demo at the address shown in the terminal.
+Then, you can access the demo at the address shown in the terminal. (Note: the UI no longer performs snapshot/preview rendering during generation; use **Extract GLB** to view/download the result.)
 
 ### 2. PBR Texture Generation
 
