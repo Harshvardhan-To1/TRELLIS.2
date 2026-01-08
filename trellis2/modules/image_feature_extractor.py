@@ -46,12 +46,16 @@ class DinoV2FeatureExtractor:
             image = [i.resize((518, 518), Image.LANCZOS) for i in image]
             image = [np.array(i.convert('RGB')).astype(np.float32) / 255 for i in image]
             image = [torch.from_numpy(i).permute(2, 0, 1).float() for i in image]
-            image = torch.stack(image).cuda()
+            image = torch.stack(image)
         else:
             raise ValueError(f"Unsupported type of image: {type(image)}")
         
-        image = self.transform(image).cuda()
-        features = self.model(image, is_training=True)['x_prenorm']
+        # Avoid unconditional .cuda() (it can create extra copies and pin memory).
+        # Keep tensors on the model's device.
+        model_device = next(self.model.parameters()).device
+        image = self.transform(image).to(device=model_device, non_blocking=True)
+        # Use inference forward path.
+        features = self.model(image, is_training=False)['x_prenorm']
         patchtokens = F.layer_norm(features, features.shape[-1:])
         return patchtokens
     
@@ -109,10 +113,11 @@ class DinoV3FeatureExtractor:
             image = [i.resize((self.image_size, self.image_size), Image.LANCZOS) for i in image]
             image = [np.array(i.convert('RGB')).astype(np.float32) / 255 for i in image]
             image = [torch.from_numpy(i).permute(2, 0, 1).float() for i in image]
-            image = torch.stack(image).cuda()
+            image = torch.stack(image)
         else:
             raise ValueError(f"Unsupported type of image: {type(image)}")
         
-        image = self.transform(image).cuda()
+        model_device = next(self.model.parameters()).device
+        image = self.transform(image).to(device=model_device, non_blocking=True)
         features = self.extract_features(image)
         return features

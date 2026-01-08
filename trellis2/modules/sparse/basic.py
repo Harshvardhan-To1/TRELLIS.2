@@ -174,7 +174,10 @@ class VarLenTensor:
             feats=feats,
             layout=self.layout,
         )
-        new_tensor._cache = self._cache
+        # Never share cached tensors across replaced instances.
+        # Sharing can pin old (often GPU) tensors in memory and can also return
+        # cached values on the wrong device after .to()/.cuda()/.cpu().
+        new_tensor._cache = {}
         return new_tensor
     
     def to_dense(self, max_length=None) -> torch.Tensor:
@@ -636,6 +639,12 @@ class SparseTensor(VarLenTensor):
         return sparse_unbind(self, dim)
 
     def replace(self, feats: torch.Tensor, coords: Optional[torch.Tensor] = None) -> 'SparseTensor':
+        # Reuse spatial cache only when coordinates (and device) are unchanged.
+        # Otherwise cached tensors (e.g. seqlen/cum_seqlen/batch_boardcast_map)
+        # can pin old GPU allocations and/or end up on the wrong device.
+        reuse_spatial_cache = coords is None and feats.device == self.feats.device
+        spatial_cache = self._spatial_cache if reuse_spatial_cache else {}
+
         if config.CONV == 'torchsparse':
             new_data = self.SparseTensorData(
                 feats=feats,
@@ -672,7 +681,7 @@ class SparseTensor(VarLenTensor):
             new_data,
             shape=torch.Size([self._shape[0]] + list(feats.shape[1:])) if self._shape is not None else None,
             scale=self._scale,
-            spatial_cache=self._spatial_cache
+            spatial_cache=spatial_cache
         )
         return new_tensor
     

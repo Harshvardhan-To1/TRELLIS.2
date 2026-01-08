@@ -65,6 +65,7 @@ def get_renderer(sample, **kwargs):
     return renderer
 
 
+@torch.no_grad()
 def render_frames(sample, extrinsics, intrinsics, options={}, verbose=True, **kwargs):
     renderer = get_renderer(sample, **options)
     rets = {}
@@ -77,6 +78,7 @@ def render_frames(sample, extrinsics, intrinsics, options={}, verbose=True, **kw
     return rets
 
 
+@torch.no_grad()
 def render_video(sample, resolution=1024, bg_color=(0, 0, 0), num_frames=120, r=2, fov=40, **kwargs):
     yaws = -torch.linspace(0, 2 * 3.1415, num_frames) + np.pi/2
     pitch = 0.25 + 0.5 * torch.sin(torch.linspace(0, 2 * 3.1415, num_frames))
@@ -86,6 +88,7 @@ def render_video(sample, resolution=1024, bg_color=(0, 0, 0), num_frames=120, r=
     return render_frames(sample, extrinsics, intrinsics, {'resolution': resolution, 'bg_color': bg_color}, **kwargs)
 
 
+@torch.no_grad()
 def render_multiview(sample, resolution=512, nviews=30):
     r = 2
     fov = 40
@@ -97,6 +100,7 @@ def render_multiview(sample, resolution=512, nviews=30):
     return res['color'], extrinsics, intrinsics
 
 
+@torch.no_grad()
 def render_snapshot(samples, resolution=512, bg_color=(0, 0, 0), offset=(-16 / 180 * np.pi, 20 / 180 * np.pi), r=10, fov=8, nviews=4, **kwargs):
     yaw = np.linspace(0, 2 * np.pi, nviews, endpoint=False)
     yaw_offset = offset[0]
