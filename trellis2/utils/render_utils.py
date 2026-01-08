@@ -45,8 +45,10 @@ def get_renderer(sample, **kwargs):
         renderer.rendering_options.resolution = kwargs.get('resolution', 512)
         renderer.rendering_options.near = kwargs.get('near', 1)
         renderer.rendering_options.far = kwargs.get('far', 100)
-        renderer.rendering_options.ssaa = kwargs.get('ssaa', 2)
-        renderer.rendering_options.peel_layers = kwargs.get('peel_layers', 8)
+        # These defaults can be extremely memory hungry at high resolutions.
+        # Callers that want higher-quality previews can explicitly override.
+        renderer.rendering_options.ssaa = kwargs.get('ssaa', 1)
+        renderer.rendering_options.peel_layers = kwargs.get('peel_layers', 4)
     elif isinstance(sample, Mesh):
         renderer = MeshRenderer()
         renderer.rendering_options.resolution = kwargs.get('resolution', 512)
@@ -79,35 +81,44 @@ def render_frames(sample, extrinsics, intrinsics, options={}, verbose=True, **kw
 
 
 @torch.no_grad()
-def render_video(sample, resolution=1024, bg_color=(0, 0, 0), num_frames=120, r=2, fov=40, **kwargs):
+def render_video(sample, resolution=1024, bg_color=(0, 0, 0), num_frames=120, r=2, fov=40, renderer_options: Optional[dict] = None, **kwargs):
     yaws = -torch.linspace(0, 2 * 3.1415, num_frames) + np.pi/2
     pitch = 0.25 + 0.5 * torch.sin(torch.linspace(0, 2 * 3.1415, num_frames))
     yaws = yaws.tolist()
     pitch = pitch.tolist()
     extrinsics, intrinsics = yaw_pitch_r_fov_to_extrinsics_intrinsics(yaws, pitch, r, fov)
-    return render_frames(sample, extrinsics, intrinsics, {'resolution': resolution, 'bg_color': bg_color}, **kwargs)
+    options = {'resolution': resolution, 'bg_color': bg_color}
+    if renderer_options:
+        options.update(renderer_options)
+    return render_frames(sample, extrinsics, intrinsics, options, **kwargs)
 
 
 @torch.no_grad()
-def render_multiview(sample, resolution=512, nviews=30):
+def render_multiview(sample, resolution=512, nviews=30, renderer_options: Optional[dict] = None):
     r = 2
     fov = 40
     cams = [sphere_hammersley_sequence(i, nviews) for i in range(nviews)]
     yaws = [cam[0] for cam in cams]
     pitchs = [cam[1] for cam in cams]
     extrinsics, intrinsics = yaw_pitch_r_fov_to_extrinsics_intrinsics(yaws, pitchs, r, fov)
-    res = render_frames(sample, extrinsics, intrinsics, {'resolution': resolution, 'bg_color': (0, 0, 0)})
+    options = {'resolution': resolution, 'bg_color': (0, 0, 0)}
+    if renderer_options:
+        options.update(renderer_options)
+    res = render_frames(sample, extrinsics, intrinsics, options)
     return res['color'], extrinsics, intrinsics
 
 
 @torch.no_grad()
-def render_snapshot(samples, resolution=512, bg_color=(0, 0, 0), offset=(-16 / 180 * np.pi, 20 / 180 * np.pi), r=10, fov=8, nviews=4, **kwargs):
+def render_snapshot(samples, resolution=512, bg_color=(0, 0, 0), offset=(-16 / 180 * np.pi, 20 / 180 * np.pi), r=10, fov=8, nviews=4, renderer_options: Optional[dict] = None, **kwargs):
     yaw = np.linspace(0, 2 * np.pi, nviews, endpoint=False)
     yaw_offset = offset[0]
     yaw = [y + yaw_offset for y in yaw]
     pitch = [offset[1] for _ in range(nviews)]
     extrinsics, intrinsics = yaw_pitch_r_fov_to_extrinsics_intrinsics(yaw, pitch, r, fov)
-    return render_frames(samples, extrinsics, intrinsics, {'resolution': resolution, 'bg_color': bg_color}, **kwargs)
+    options = {'resolution': resolution, 'bg_color': bg_color}
+    if renderer_options:
+        options.update(renderer_options)
+    return render_frames(samples, extrinsics, intrinsics, options, **kwargs)
 
 
 def make_pbr_vis_frames(result, resolution=1024):

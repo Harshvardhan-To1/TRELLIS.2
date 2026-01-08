@@ -132,8 +132,8 @@ import o_voxel
 # 1. Setup Environment Map
 envmap = EnvMap(torch.tensor(
     cv2.cvtColor(cv2.imread('assets/hdri/forest.exr', cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB),
-    dtype=torch.float32, device='cuda'
-))
+    dtype=torch.float16, device='cuda'
+), keep_latlong=False)
 
 # 2. Load Pipeline
 pipeline = Trellis2ImageTo3DPipeline.from_pretrained("microsoft/TRELLIS.2-4B")

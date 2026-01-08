@@ -36,8 +36,12 @@ def latlong_to_cubemap(latlong_map, res):
 
 
 class EnvMap:
-    def __init__(self, image: torch.Tensor):
+    def __init__(self, image: torch.Tensor, *, keep_latlong: bool = False):
+        # NOTE: `image` can be a large latlong HDR tensor (often multi-megapixel).
+        # We only need it to build the cubemap once; keeping it around can waste
+        # a lot of GPU memory in long-running apps.
         self.image = image
+        self.keep_latlong = keep_latlong
         
     @property
     def _backend(self):
@@ -47,6 +51,9 @@ class EnvMap:
             cubemap = latlong_to_cubemap(self.image, [512, 512])
             self._nvdiffrec_envlight = EnvironmentLight(cubemap)
             self._nvdiffrec_envlight.build_mips()
+            if not self.keep_latlong:
+                # Drop the original latlong map to free memory after cubemap/mips are built.
+                self.image = None
         return self._nvdiffrec_envlight
 
     def shade(self, gb_pos, gb_normal, kd, ks, view_pos, specular=True):

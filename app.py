@@ -12,6 +12,7 @@ import numpy as np
 from PIL import Image
 import base64
 import io
+import gc
 from trellis2.modules.sparse import SparseTensor
 from trellis2.pipelines import Trellis2ImageTo3DPipeline
 from trellis2.renderers import EnvMap
@@ -325,8 +326,10 @@ def preprocess_image(image: Image.Image) -> Image.Image:
 def pack_state(latents: Tuple[SparseTensor, SparseTensor, int]) -> dict:
     shape_slat, tex_slat, res = latents
     return {
-        'shape_slat_feats': shape_slat.feats.cpu().numpy(),
-        'tex_slat_feats': tex_slat.feats.cpu().numpy(),
+        # Store compressed (fp16) to reduce Gradio session RAM footprint.
+        # We'll cast back to fp32 on load for decoding.
+        'shape_slat_feats': shape_slat.feats.detach().float().cpu().numpy().astype(np.float16, copy=False),
+        'tex_slat_feats': tex_slat.feats.detach().float().cpu().numpy().astype(np.float16, copy=False),
         'coords': shape_slat.coords.cpu().numpy(),
         'res': res,
     }
@@ -334,10 +337,10 @@ def pack_state(latents: Tuple[SparseTensor, SparseTensor, int]) -> dict:
     
 def unpack_state(state: dict) -> Tuple[SparseTensor, SparseTensor, int]:
     shape_slat = SparseTensor(
-        feats=torch.from_numpy(state['shape_slat_feats']).cuda(),
+        feats=torch.from_numpy(state['shape_slat_feats']).float().cuda(),
         coords=torch.from_numpy(state['coords']).cuda(),
     )
-    tex_slat = shape_slat.replace(torch.from_numpy(state['tex_slat_feats']).cuda())
+    tex_slat = shape_slat.replace(torch.from_numpy(state['tex_slat_feats']).float().cuda())
     return shape_slat, tex_slat, state['res']
 
 
@@ -368,40 +371,90 @@ def image_to_3d(
     progress=gr.Progress(track_tqdm=True),
 ) -> str:
     # --- Sampling ---
-    outputs, latents = pipeline.run(
-        image,
-        seed=seed,
-        preprocess_image=False,
-        sparse_structure_sampler_params={
-            "steps": ss_sampling_steps,
-            "guidance_strength": ss_guidance_strength,
-            "guidance_rescale": ss_guidance_rescale,
-            "rescale_t": ss_rescale_t,
-        },
-        shape_slat_sampler_params={
-            "steps": shape_slat_sampling_steps,
-            "guidance_strength": shape_slat_guidance_strength,
-            "guidance_rescale": shape_slat_guidance_rescale,
-            "rescale_t": shape_slat_rescale_t,
-        },
-        tex_slat_sampler_params={
-            "steps": tex_slat_sampling_steps,
-            "guidance_strength": tex_slat_guidance_strength,
-            "guidance_rescale": tex_slat_guidance_rescale,
-            "rescale_t": tex_slat_rescale_t,
-        },
-        pipeline_type={
-            "512": "512",
-            "1024": "1024_cascade",
-            "1536": "1536_cascade",
-        }[resolution],
-        return_latent=True,
-    )
+    pipeline_type = {
+        "512": "512",
+        "1024": "1024_cascade",
+        "1536": "1536_cascade",
+    }[resolution]
+
+    # Token count is a common VRAM driver for the cascade variants. Retry with
+    # tighter caps if we hit CUDA OOM instead of crashing the whole session.
+    token_attempts = [49152, 32768, 24576] if "cascade" in pipeline_type else [49152]
+    last_err: Optional[BaseException] = None
+    for max_num_tokens in token_attempts:
+        try:
+            outputs, latents = pipeline.run(
+                image,
+                seed=seed,
+                preprocess_image=False,
+                sparse_structure_sampler_params={
+                    "steps": ss_sampling_steps,
+                    "guidance_strength": ss_guidance_strength,
+                    "guidance_rescale": ss_guidance_rescale,
+                    "rescale_t": ss_rescale_t,
+                },
+                shape_slat_sampler_params={
+                    "steps": shape_slat_sampling_steps,
+                    "guidance_strength": shape_slat_guidance_strength,
+                    "guidance_rescale": shape_slat_guidance_rescale,
+                    "rescale_t": shape_slat_rescale_t,
+                },
+                tex_slat_sampler_params={
+                    "steps": tex_slat_sampling_steps,
+                    "guidance_strength": tex_slat_guidance_strength,
+                    "guidance_rescale": tex_slat_guidance_rescale,
+                    "rescale_t": tex_slat_rescale_t,
+                },
+                pipeline_type=pipeline_type,
+                max_num_tokens=max_num_tokens,
+                return_latent=True,
+            )
+            break
+        except RuntimeError as e:
+            last_err = e
+            if "out of memory" not in str(e).lower():
+                raise
+            torch.cuda.empty_cache()
+            gc.collect()
+    else:
+        assert last_err is not None
+        raise last_err
     mesh = outputs[0]
     mesh.simplify(16777216) # nvdiffrast limit
-    images = render_utils.render_snapshot(mesh, resolution=1024, r=2, fov=36, nviews=STEPS, envmap=envmap)
+    # Preview rendering is one of the biggest VRAM spikes in the app.
+    # Use lower-memory defaults, and gracefully fall back if VRAM is tight.
+    render_attempts = [
+        (768, {"ssaa": 1, "peel_layers": 4}),
+        (512, {"ssaa": 1, "peel_layers": 3}),
+        (384, {"ssaa": 1, "peel_layers": 2}),
+    ]
+    last_err: Optional[BaseException] = None
+    for reso, opts in render_attempts:
+        try:
+            images = render_utils.render_snapshot(
+                mesh,
+                resolution=reso,
+                r=2,
+                fov=36,
+                nviews=STEPS,
+                renderer_options=opts,
+                envmap=envmap,
+            )
+            break
+        except RuntimeError as e:
+            last_err = e
+            if "out of memory" not in str(e).lower():
+                raise
+            torch.cuda.empty_cache()
+            gc.collect()
+    else:
+        assert last_err is not None
+        raise last_err
     state = pack_state(latents)
+    # Proactively release large intermediates before returning to Gradio.
+    del outputs, latents, mesh
     torch.cuda.empty_cache()
+    gc.collect()
     
     # --- HTML Construction ---
     # The Stack of 48 Images
@@ -510,7 +563,9 @@ def extract_glb(
     os.makedirs(user_dir, exist_ok=True)
     glb_path = os.path.join(user_dir, f'sample_{timestamp}.glb')
     glb.export(glb_path, extension_webp=True)
+    del shape_slat, tex_slat, mesh, glb
     torch.cuda.empty_cache()
+    gc.collect()
     return glb_path, glb_path
 
 
@@ -628,19 +683,20 @@ if __name__ == "__main__":
     pipeline = Trellis2ImageTo3DPipeline.from_pretrained('microsoft/TRELLIS.2-4B')
     pipeline.cuda()
     
+    def _load_envmap(path: str, max_size: int = 1024) -> EnvMap:
+        img = cv2.cvtColor(cv2.imread(path, cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB)
+        h, w = img.shape[:2]
+        m = max(h, w)
+        if m > max_size:
+            scale = max_size / float(m)
+            img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+        ten = torch.from_numpy(img).to(device='cuda', dtype=torch.float16)
+        return EnvMap(ten, keep_latlong=False)
+
     envmap = {
-        'forest': EnvMap(torch.tensor(
-            cv2.cvtColor(cv2.imread('assets/hdri/forest.exr', cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB),
-            dtype=torch.float32, device='cuda'
-        )),
-        'sunset': EnvMap(torch.tensor(
-            cv2.cvtColor(cv2.imread('assets/hdri/sunset.exr', cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB),
-            dtype=torch.float32, device='cuda'
-        )),
-        'courtyard': EnvMap(torch.tensor(
-            cv2.cvtColor(cv2.imread('assets/hdri/courtyard.exr', cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB),
-            dtype=torch.float32, device='cuda'
-        )),
+        'forest': _load_envmap('assets/hdri/forest.exr'),
+        'sunset': _load_envmap('assets/hdri/sunset.exr'),
+        'courtyard': _load_envmap('assets/hdri/courtyard.exr'),
     }
     
     demo.launch(css=css, head=head)
