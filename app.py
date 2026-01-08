@@ -291,10 +291,10 @@ empty_html = f"""
 
 
 def image_to_base64(image):
-    buffered = io.BytesIO()
     image = image.convert("RGB")
-    image.save(buffered, format="jpeg", quality=85)
-    img_str = base64.b64encode(buffered.getvalue()).decode()
+    with io.BytesIO() as buffered:
+        image.save(buffered, format="jpeg", quality=85)
+        img_str = base64.b64encode(buffered.getvalue()).decode()
     return f"data:image/jpeg;base64,{img_str}"
 
 
@@ -621,8 +621,9 @@ if __name__ == "__main__":
     # Construct ui components
     btn_img_base64_strs = {}
     for i in range(len(MODES)):
-        icon = Image.open(MODES[i]['icon'])
-        MODES[i]['icon_base64'] = image_to_base64(icon)
+        # Ensure file handles are closed (important for long-running sessions).
+        with Image.open(MODES[i]['icon']) as icon:
+            MODES[i]['icon_base64'] = image_to_base64(icon)
 
     pipeline = Trellis2ImageTo3DPipeline.from_pretrained('microsoft/TRELLIS.2-4B')
     pipeline.cuda()

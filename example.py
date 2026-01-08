@@ -21,8 +21,9 @@ pipeline = Trellis2ImageTo3DPipeline.from_pretrained("microsoft/TRELLIS.2-4B")
 pipeline.cuda()
 
 # 3. Load Image & Run
-image = Image.open("assets/example_image/T.png")
-mesh = pipeline.run(image)[0]
+# Use a context manager so the underlying file handle is closed promptly.
+with Image.open("assets/example_image/T.png") as image:
+    mesh = pipeline.run(image)[0]
 mesh.simplify(16777216) # nvdiffrast limit
 
 # 4. Render Video
