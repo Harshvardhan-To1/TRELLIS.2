@@ -1,37 +1,20 @@
 import gradio as gr
 
 import os
-os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 from datetime import datetime
 import shutil
-import cv2
 from typing import *
 import torch
 import numpy as np
 from PIL import Image
-import base64
-import io
 from trellis2.modules.sparse import SparseTensor
 from trellis2.pipelines import Trellis2ImageTo3DPipeline
-from trellis2.renderers import EnvMap
-from trellis2.utils import render_utils
 import o_voxel
 
 
 MAX_SEED = np.iinfo(np.int32).max
 TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tmp')
-MODES = [
-    {"name": "Normal", "icon": "assets/app/normal.png", "render_key": "normal"},
-    {"name": "Clay render", "icon": "assets/app/clay.png", "render_key": "clay"},
-    {"name": "Base color", "icon": "assets/app/basecolor.png", "render_key": "base_color"},
-    {"name": "HDRI forest", "icon": "assets/app/hdri_forest.png", "render_key": "shaded_forest"},
-    {"name": "HDRI sunset", "icon": "assets/app/hdri_sunset.png", "render_key": "shaded_sunset"},
-    {"name": "HDRI courtyard", "icon": "assets/app/hdri_courtyard.png", "render_key": "shaded_courtyard"},
-]
-STEPS = 8
-DEFAULT_MODE = 3
-DEFAULT_STEP = 3
 
 
 css = """
@@ -80,222 +63,18 @@ css = """
     right: 0 !important;
     transform: unset !important;
 }
-
-/* Previewer */
-.previewer-container {
-    position: relative;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    width: 100%;
-    height: 722px;
-    margin: 0 auto;
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-}
-
-.previewer-container .tips-icon {
-    position: absolute;
-    right: 10px;
-    top: 10px;
-    z-index: 10;
-    border-radius: 10px;
-    color: #fff;
-    background-color: var(--color-accent);
-    padding: 3px 6px;
-    user-select: none;
-}
-
-.previewer-container .tips-text {
-    position: absolute;
-    right: 10px;
-    top: 50px;
-    color: #fff;
-    background-color: var(--color-accent);
-    border-radius: 10px;
-    padding: 6px;
-    text-align: left;
-    max-width: 300px;
-    z-index: 10;
-    transition: all 0.3s;
-    opacity: 0%;
-    user-select: none;
-}
-
-.previewer-container .tips-text p {
-    font-size: 14px;
-    line-height: 1.2;
-}
-
-.tips-icon:hover + .tips-text { 
-    display: block;
-    opacity: 100%;
-}
-
-/* Row 1: Display Modes */
-.previewer-container .mode-row {
-    width: 100%;
-    display: flex;
-    gap: 8px;
-    justify-content: center;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-}
-.previewer-container .mode-btn {
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    cursor: pointer;
-    opacity: 0.5;
-    transition: all 0.2s;
-    border: 2px solid #ddd;
-    object-fit: cover;
-}
-.previewer-container .mode-btn:hover { opacity: 0.9; transform: scale(1.1); }
-.previewer-container .mode-btn.active {
-    opacity: 1;
-    border-color: var(--color-accent);
-    transform: scale(1.1);
-}
-
-/* Row 2: Display Image */
-.previewer-container .display-row {
-    margin-bottom: 20px;
-    min-height: 400px;
-    width: 100%;
-    flex-grow: 1;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-}
-.previewer-container .previewer-main-image {
-    max-width: 100%;
-    max-height: 100%;
-    flex-grow: 1;
-    object-fit: contain;
-    display: none;
-}
-.previewer-container .previewer-main-image.visible {
-    display: block;
-}
-
-/* Row 3: Custom HTML Slider */
-.previewer-container .slider-row {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    padding: 0 10px;
-}
-
-.previewer-container input[type=range] {
-    -webkit-appearance: none;
-    width: 100%;
-    max-width: 400px;
-    background: transparent;
-}
-.previewer-container input[type=range]::-webkit-slider-runnable-track {
-    width: 100%;
-    height: 8px;
-    cursor: pointer;
-    background: #ddd;
-    border-radius: 5px;
-}
-.previewer-container input[type=range]::-webkit-slider-thumb {
-    height: 20px;
-    width: 20px;
-    border-radius: 50%;
-    background: var(--color-accent);
-    cursor: pointer;
-    -webkit-appearance: none;
-    margin-top: -6px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-    transition: transform 0.1s;
-}
-.previewer-container input[type=range]::-webkit-slider-thumb:hover {
-    transform: scale(1.2);
-}
-
-/* Overwrite Previewer Block Style */
-.gradio-container .padded:has(.previewer-container) {
-    padding: 0 !important;
-}
-
-.gradio-container:has(.previewer-container) [data-testid="block-label"] {
-    position: absolute;
-    top: 0;
-    left: 0;
-}
 """
 
 
-head = """
-<script>
-    function refreshView(mode, step) {
-        // 1. Find current mode and step
-        const allImgs = document.querySelectorAll('.previewer-main-image');
-        for (let i = 0; i < allImgs.length; i++) {
-            const img = allImgs[i];
-            if (img.classList.contains('visible')) {
-                const id = img.id;
-                const [_, m, s] = id.split('-');
-                if (mode === -1) mode = parseInt(m.slice(1));
-                if (step === -1) step = parseInt(s.slice(1));
-                break;
-            }
-        }
-        
-        // 2. Hide ALL images
-        // We select all elements with class 'previewer-main-image'
-        allImgs.forEach(img => img.classList.remove('visible'));
-
-        // 3. Construct the specific ID for the current state
-        // Format: view-m{mode}-s{step}
-        const targetId = 'view-m' + mode + '-s' + step;
-        const targetImg = document.getElementById(targetId);
-
-        // 4. Show ONLY the target
-        if (targetImg) {
-            targetImg.classList.add('visible');
-        }
-
-        // 5. Update Button Highlights
-        const allBtns = document.querySelectorAll('.mode-btn');
-        allBtns.forEach((btn, idx) => {
-            if (idx === mode) btn.classList.add('active');
-            else btn.classList.remove('active');
-        });
-    }
-    
-    // --- Action: Switch Mode ---
-    function selectMode(mode) {
-        refreshView(mode, -1);
-    }
-    
-    // --- Action: Slider Change ---
-    function onSliderChange(val) {
-        refreshView(-1, parseInt(val));
-    }
-</script>
-"""
-
-
-empty_html = f"""
-<div class="previewer-container">
-    <svg style=" opacity: .5; height: var(--size-5); color: var(--body-text-color);"
-    xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="feather feather-image"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+preview_disabled_html = """
+<div style="height: 722px; display: flex; align-items: center; justify-content: center; opacity: 0.7;">
+  <div style="max-width: 520px; text-align: center; line-height: 1.4;">
+    <p style="margin: 0; font-size: 14px;">
+      Preview rendering has been removed. Click <b>Extract GLB</b> to generate a 3D asset for viewing/downloading.
+    </p>
+  </div>
 </div>
 """
-
-
-def image_to_base64(image):
-    image = image.convert("RGB")
-    with io.BytesIO() as buffered:
-        image.save(buffered, format="jpeg", quality=85)
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-    return f"data:image/jpeg;base64,{img_str}"
 
 
 def start_session(req: gr.Request):
@@ -366,9 +145,9 @@ def image_to_3d(
     tex_slat_rescale_t: float,
     req: gr.Request,
     progress=gr.Progress(track_tqdm=True),
-) -> str:
+) -> Tuple[dict, str]:
     # --- Sampling ---
-    outputs, latents = pipeline.run(
+    _outputs, latents = pipeline.run(
         image,
         seed=seed,
         preprocess_image=False,
@@ -397,76 +176,11 @@ def image_to_3d(
         }[resolution],
         return_latent=True,
     )
-    mesh = outputs[0]
-    mesh.simplify(16777216) # nvdiffrast limit
-    images = render_utils.render_snapshot(mesh, resolution=1024, r=2, fov=36, nviews=STEPS, envmap=envmap)
     state = pack_state(latents)
     torch.cuda.empty_cache()
-    
-    # --- HTML Construction ---
-    # The Stack of 48 Images
-    images_html = ""
-    for m_idx, mode in enumerate(MODES):
-        for s_idx in range(STEPS):
-            # ID Naming Convention: view-m{mode}-s{step}
-            unique_id = f"view-m{m_idx}-s{s_idx}"
-            
-            # Logic: Only Mode 0, Step 0 is visible initially
-            is_visible = (m_idx == DEFAULT_MODE and s_idx == DEFAULT_STEP)
-            vis_class = "visible" if is_visible else ""
-            
-            # Image Source
-            img_base64 = image_to_base64(Image.fromarray(images[mode['render_key']][s_idx]))
-            
-            # Render the Tag
-            images_html += f"""
-                <img id="{unique_id}" 
-                     class="previewer-main-image {vis_class}" 
-                     src="{img_base64}" 
-                     loading="eager">
-            """
-    
-    # Button Row HTML
-    btns_html = ""
-    for idx, mode in enumerate(MODES):        
-        active_class = "active" if idx == DEFAULT_MODE else ""
-        # Note: onclick calls the JS function defined in Head
-        btns_html += f"""
-            <img src="{mode['icon_base64']}" 
-                 class="mode-btn {active_class}" 
-                 onclick="selectMode({idx})"
-                 title="{mode['name']}">
-        """
-    
-    # Assemble the full component
-    full_html = f"""
-    <div class="previewer-container">
-        <div class="tips-wrapper">
-            <div class="tips-icon">💡Tips</div>
-            <div class="tips-text">
-                <p>● <b>Render Mode</b> - Click on the circular buttons to switch between different render modes.</p>
-                <p>● <b>View Angle</b> - Drag the slider to change the view angle.</p>
-            </div>
-        </div>
-        
-        <!-- Row 1: Viewport containing 48 static <img> tags -->
-        <div class="display-row">
-            {images_html}
-        </div>
-        
-        <!-- Row 2 -->
-        <div class="mode-row" id="btn-group">
-            {btns_html}
-        </div>
 
-        <!-- Row 3: Slider -->
-        <div class="slider-row">
-            <input type="range" id="custom-slider" min="0" max="{STEPS - 1}" value="{DEFAULT_STEP}" step="1" oninput="onSliderChange(this.value)">
-        </div>
-    </div>
-    """
-    
-    return state, full_html
+    # Keep the second output slot stable, but do not perform any rendering.
+    return state, preview_disabled_html
 
 
 def extract_glb(
@@ -555,8 +269,8 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
 
         with gr.Column(scale=10):
             with gr.Walkthrough(selected=0) as walkthrough:
-                with gr.Step("Preview", id=0):
-                    preview_output = gr.HTML(empty_html, label="3D Asset Preview", show_label=True, container=True)
+                with gr.Step("Generate", id=0):
+                    preview_output = gr.HTML(preview_disabled_html, label="Status", show_label=True, container=True)
                     extract_btn = gr.Button("Extract GLB")
                 with gr.Step("Extract", id=1):
                     glb_output = gr.Model3D(label="Extracted GLB", height=724, show_label=True, display_mode="solid", clear_color=(0.25, 0.25, 0.25, 1.0))
@@ -618,29 +332,6 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
 if __name__ == "__main__":
     os.makedirs(TMP_DIR, exist_ok=True)
 
-    # Construct ui components
-    btn_img_base64_strs = {}
-    for i in range(len(MODES)):
-        # Ensure file handles are closed (important for long-running sessions).
-        with Image.open(MODES[i]['icon']) as icon:
-            MODES[i]['icon_base64'] = image_to_base64(icon)
-
     pipeline = Trellis2ImageTo3DPipeline.from_pretrained('microsoft/TRELLIS.2-4B')
     pipeline.cuda()
-    
-    envmap = {
-        'forest': EnvMap(torch.tensor(
-            cv2.cvtColor(cv2.imread('assets/hdri/forest.exr', cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB),
-            dtype=torch.float32, device='cuda'
-        )),
-        'sunset': EnvMap(torch.tensor(
-            cv2.cvtColor(cv2.imread('assets/hdri/sunset.exr', cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB),
-            dtype=torch.float32, device='cuda'
-        )),
-        'courtyard': EnvMap(torch.tensor(
-            cv2.cvtColor(cv2.imread('assets/hdri/courtyard.exr', cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB),
-            dtype=torch.float32, device='cuda'
-        )),
-    }
-    
-    demo.launch(css=css, head=head)
+    demo.launch(css=css)
