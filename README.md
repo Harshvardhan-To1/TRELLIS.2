@@ -165,6 +165,17 @@ python app.py
 
 Then, you can access the demo at the address shown in the terminal. (Note: the UI no longer performs snapshot/preview rendering during generation; use **Extract GLB** to view/download the result.)
 
+#### fal App (serverless)
+
+This repo also includes a minimal fal app entrypoint at [`fal_app.py`](fal_app.py). It exposes:
+- `POST /` for single-image generation
+- `POST /multi` for multi-view conditioning (conditioning is averaged across input images)
+
+The entrypoint is the standard:
+```sh
+python fal_app.py
+```
+
 ### 2. PBR Texture Generation
 
 Will be released soon. Please stay tuned!
